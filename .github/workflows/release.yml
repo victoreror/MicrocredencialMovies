@@ -1,0 +1,162 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-jar:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Build JAR
+      run: mvn package -DskipTests
+
+    - name: Upload JAR
+      uses: actions/upload-artifact@v4
+      with:
+        name: jar-file
+        path: target/ucred-java-ui-movies-*.jar
+
+  build-portable:
+    needs: build-jar
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: maven
+
+    - name: Extract version from pom.xml
+      shell: bash
+      run: |
+        VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Download JAR
+      uses: actions/download-artifact@v4
+      with:
+        name: jar-file
+        path: target/
+
+    - name: Create portable app with jpackage (macOS / Linux)
+      if: runner.os != 'Windows'
+      run: |
+        jpackage --input target \
+          --name "UCRED-Movies" \
+          --main-jar "ucred-java-ui-movies-${{ env.VERSION }}.jar" \
+          --type app-image \
+          --app-version "${{ env.VERSION }}" \
+          --vendor "UCRED" \
+          --description "Movie browser using TMDb API"
+
+    - name: Create portable app with jpackage (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        jpackage --input target `
+          --name "UCRED-Movies" `
+          --main-jar "ucred-java-ui-movies-${{ env.VERSION }}.jar" `
+          --type app-image `
+          --app-version "${{ env.VERSION }}" `
+          --vendor "UCRED" `
+          --description "Movie browser using TMDb API"
+
+    - name: Package App (Linux)
+      if: runner.os == 'Linux'
+      run: zip -r UCRED-Movies-Linux-x64.zip UCRED-Movies
+
+    - name: Package App (macOS)
+      if: runner.os == 'macOS'
+      run: zip -r UCRED-Movies-macOS.zip "UCRED-Movies.app"
+
+    - name: Package App (Windows)
+      if: runner.os == 'Windows'
+      run: Compress-Archive -Path "UCRED-Movies" -DestinationPath "UCRED-Movies-Windows-x64.zip"
+
+    - name: Upload portable app
+      uses: actions/upload-artifact@v4
+      with:
+        name: portable-${{ matrix.os }}
+        path: "*.zip"
+
+  create-release:
+    needs: build-portable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Extract version from pom.xml
+      shell: bash
+      run: |
+        VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          jar-file/*.jar
+          portable-*/*.zip
+        body: |
+          # UCRED Movies Browser ${{ github.ref_name }}
+          
+          Navegador de películas usando la API de The Movie Database (TMDb).
+          
+          ## 📦 Ejecutables portables (sin instalación)
+          
+          ✨ **No requieren configuración previa** - La aplicación pedirá tu API key al iniciar
+          
+          - **Windows**: Descarga `UCRED-Movies-Windows-x64.zip`, descomprime y **doble click** en `UCRED-Movies.exe`
+          - **macOS**: Descarga `UCRED-Movies-macOS.zip`, descomprime y **doble click** en `UCRED-Movies.app`
+          - **Linux**: Descarga `UCRED-Movies-Linux-x64.zip`, descomprime y ejecuta `./UCRED-Movies/bin/UCRED-Movies`
+          
+          🔧 **JRE incluido** - No necesitas tener Java instalado
+          
+          ## 🔑 API Key de TMDb
+          
+          Al ejecutar la aplicación, se mostrará un diálogo solicitando tu API key de TMDb.
+          
+          **Obtén tu API key gratis (1 minuto):**
+          1. Crea cuenta en https://www.themoviedb.org/signup
+          2. Ve a https://www.themoviedb.org/settings/api
+          3. Solicita API key (opción "Developer")
+          4. Copia tu **API Key (v3 auth)**
+          
+          ⚠️ **Nota**: La API key NO se guarda, deberás introducirla cada vez que abras la aplicación.
+          
+          ## JAR ejecutable (requiere Java 17+)
+          
+          Si prefieres usar el JAR directamente:
+          ```bash
+          java -jar ucred-java-ui-movies-${{ env.VERSION }}.jar
+          ```
+          
+          La aplicación pedirá la API key al iniciar.
+        draft: false
+        prerelease: false
